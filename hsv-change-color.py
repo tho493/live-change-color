@@ -75,17 +75,21 @@ class HSVColorChanger:
         if self.is_camera_on and self.camera is not None:
             ret, frame = self.camera.read()
             if ret:
-                results = self.model.track(frame, persist=True, classes=0)
-                self.image = frame
+                self.image = cv2.flip(frame, 1)
                 self.display_image(self.image, self.original_label)
                 self.create_mask()
         
         self.root.after(10, self.update)
-            
     def create_mask(self):
         if self.image is None:
             return
             
+        self.results_yolo = self.model.track(self.image, persist=True, classes=0)
+        # for result in self.results:
+        #     for box in result.boxes:
+        #             x1, y1, x2, y2 = map(int, box.xyxy[0])
+        #             cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
         
         color_ranges = {
@@ -111,18 +115,32 @@ class HSVColorChanger:
         if self.image is None or self.mask is None:
             return
             
+        # Tạo mask mới chỉ cho các vùng boxes
+        boxes_mask = np.zeros_like(self.mask)
+        
+        for result in self.results_yolo:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                # Vẽ rectangle
+                cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # Cập nhật mask cho vùng trong box
+                boxes_mask[y1:y2, x1:x2] = 255
+        
+        # Kết hợp mask gốc với mask boxes
+        combined_mask = cv2.bitwise_and(self.mask, boxes_mask)
+        
+        hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
+        
         new_hue = int(self.hue_scale.get())
         new_sat = int(self.sat_scale.get())
         new_val = int(self.val_scale.get())
         
-        hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
-        
-        hsv[self.mask > 0, 0] = new_hue
-        hsv[self.mask > 0, 1] = new_sat
-        hsv[self.mask > 0, 2] = new_val
+        hsv[combined_mask > 0, 0] = new_hue
+        hsv[combined_mask > 0, 1] = new_sat
+        hsv[combined_mask > 0, 2] = new_val
         
         result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    
+
         self.display_image(result, self.processed_label)
         
     def display_image(self, cv_img, label):
