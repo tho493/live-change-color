@@ -84,11 +84,7 @@ class HSVColorChanger:
         if self.image is None:
             return
             
-        self.results_yolo = self.model.track(self.image, persist=True, classes=0)
-        # for result in self.results:
-        #     for box in result.boxes:
-        #             x1, y1, x2, y2 = map(int, box.xyxy[0])
-        #             cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        self.results_yolo = self.model.track(self.image, persist=True, classes=0, verbose=False)
 
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
         
@@ -114,31 +110,67 @@ class HSVColorChanger:
     def update_color(self, event):
         if self.image is None or self.mask is None:
             return
-            
-        # Tạo mask mới chỉ cho các vùng boxes
+
+        # Tải Haar cascade để phát hiện khuôn mặt
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+        # Tạo mask
         boxes_mask = np.zeros_like(self.mask)
-        
+        face_area_mask = np.zeros_like(self.mask)
+
+        gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+
         for result in self.results_yolo:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                # Vẽ rectangle
+                # Vẽ hình chữ nhật cho người
                 cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                # Cập nhật mask cho vùng trong box
+
+                # Cắt ROI để phát hiện khuôn mặt
+                roi_gray = gray[y1:y2, x1:x2]
+                roi_color = self.image[y1:y2, x1:x2]
+
+                # Phát hiện khuôn mặt trong ROI
+                faces = face_cascade.detectMultiScale(roi_gray, 1.1, 4)
+
+                # Cập nhật mask cho các vùng box
                 boxes_mask[y1:y2, x1:x2] = 255
-        
-        # Kết hợp mask gốc với mask boxes
-        combined_mask = cv2.bitwise_and(self.mask, boxes_mask)
-        
+
+                for (fx, fy, fw, fh) in faces:
+                    # Tính toán hệ số mở rộng
+                    expansion_factor = 1.3
+                    new_fw = int(fw * expansion_factor)  # Mở rộng chiều rộng
+                    new_x1 = fx - int((new_fw - fw) / 2)  # Tính toán tọa độ x mới bên trái
+                    new_x2 = new_x1 + new_fw  # Tính toán tọa độ x mới bên phải
+
+                    # Tạo các điểm đường viền quanh khuôn mặt với phần mở rộng
+                    head_extension = int(fh * 0.5)
+                    extended_contour = np.array([
+                        [new_x1, fy - head_extension],      # Điểm trên bên trái
+                        [new_x2, fy - head_extension],      # Điểm trên bên phải
+                        [new_x2, fy + fh],                  # Điểm dưới bên phải
+                        [new_x1, fy + fh]                   # Điểm dưới bên trái
+                    ], np.int32)
+
+                    # Tạo mask cho vùng khuôn mặt
+                    shifted_contour = extended_contour + (x1, y1)
+                    cv2.fillPoly(face_area_mask, [shifted_contour], color=(255, 255, 255))
+
+        # Kết hợp các mask
+        boxes_without_faces = cv2.bitwise_and(boxes_mask, cv2.bitwise_not(face_area_mask))
+        final_mask = cv2.bitwise_and(self.mask, boxes_without_faces)
+
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
-        
+
         new_hue = int(self.hue_scale.get())
         new_sat = int(self.sat_scale.get())
         new_val = int(self.val_scale.get())
-        
-        hsv[combined_mask > 0, 0] = new_hue
-        hsv[combined_mask > 0, 1] = new_sat
-        hsv[combined_mask > 0, 2] = new_val
-        
+
+        # Chỉ thay đổi màu sắc ở các vùng không phải mặt
+        hsv[final_mask > 0, 0] = new_hue
+        hsv[final_mask > 0, 1] = new_sat
+        hsv[final_mask > 0, 2] = new_val
+
         result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
         self.display_image(result, self.processed_label)
