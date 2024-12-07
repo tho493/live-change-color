@@ -31,26 +31,32 @@ class HSVColorChanger:
         self.camera_btn = ttk.Button(control_frame, text="Bật camera", command=self.toggle_camera)
         self.camera_btn.grid(row=0, column=0, padx=5)
         
-        ttk.Label(control_frame, text="Chọn màu:").grid(row=0, column=1, padx=5)
+        ttk.Label(control_frame, text="Chọn phân loại:").grid(row=1, column=0, padx=5)
+        self.classification_combo = ttk.Combobox(control_frame, values=['accessories', 'bags', 'clothing', 'shoes'])
+        self.classification_combo.grid(row=1, column=1, padx=5)
+        self.classification_combo.set('clothing')  # Giá trị mặc định
+        self.classification_combo.bind('<<ComboboxSelected>>', lambda e: self.create_mask())
+        
+        ttk.Label(control_frame, text="Chọn màu:").grid(row=2, column=0, padx=5)
         self.color_combo = ttk.Combobox(control_frame, values=['black', 'white', 'red', 'blue', 'green'])
-        self.color_combo.grid(row=0, column=2, padx=5)
+        self.color_combo.grid(row=2, column=1, padx=5)
         self.color_combo.set('black')  # Giá trị mặc định
         self.color_combo.bind('<<ComboboxSelected>>', lambda e: self.create_mask())
-        
-        ttk.Label(control_frame, text="Hue:").grid(row=1, column=0, padx=5)
+
+        ttk.Label(control_frame, text="Hue:").grid(row=3, column=0, padx=5)
         self.hue_scale = ttk.Scale(control_frame, from_=0, to=179, orient=tk.HORIZONTAL, length=200,
                                  command=self.update_color)
-        self.hue_scale.grid(row=1, column=1, padx=5)
+        self.hue_scale.grid(row=3, column=1, padx=5)
         
-        ttk.Label(control_frame, text="Saturation:").grid(row=2, column=0, padx=5)
+        ttk.Label(control_frame, text="Saturation:").grid(row=4, column=0, padx=5)
         self.sat_scale = ttk.Scale(control_frame, from_=0, to=255, orient=tk.HORIZONTAL, length=200,
                                  command=self.update_color)
-        self.sat_scale.grid(row=2, column=1, padx=5)
+        self.sat_scale.grid(row=4, column=1, padx=5)
         
-        ttk.Label(control_frame, text="Value:").grid(row=3, column=0, padx=5)
+        ttk.Label(control_frame, text="Value:").grid(row=5, column=0, padx=5)
         self.val_scale = ttk.Scale(control_frame, from_=0, to=255, orient=tk.HORIZONTAL, length=200,
                                  command=self.update_color)
-        self.val_scale.grid(row=3, column=1, padx=5)
+        self.val_scale.grid(row=5, column=1, padx=5)
         
         self.camera = None
         self.is_camera_on = False
@@ -83,12 +89,6 @@ class HSVColorChanger:
     def create_mask(self):
         if self.image is None:
             return
-            
-        self.results_yolo = self.model.predict(self.image, classes=2)
-        # for result in self.results:
-        #     for box in result.boxes:
-        #             x1, y1, x2, y2 = map(int, box.xyxy[0])
-        #             cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
         
@@ -99,10 +99,15 @@ class HSVColorChanger:
             'blue': (np.array([85, 50, 50]), np.array([145, 255, 255])),
             'green': (np.array([35, 70, 50]), np.array([85, 255, 255]))
         }
-        
+
+        class_ranges = {'accessories': 0, 'bags': 1, 'clothing': 2, 'shoes': 3}
+
+        selected_class = class_ranges[self.classification_combo.get()]  
         selected_color = self.color_combo.get()
         lower, upper = color_ranges[selected_color]
         
+        self.results_yolo = self.model.track(self.image, classes=selected_class)
+
         self.mask = cv2.inRange(hsv, lower, upper)
         
         kernel = np.ones((5,5), np.uint8)
@@ -117,13 +122,12 @@ class HSVColorChanger:
             
         # Tạo mask mới chỉ cho các vùng boxes
         boxes_mask = np.zeros_like(self.mask)
-        
         for box in self.results_yolo[0].boxes:
             if(box.conf[0] > 0.7):
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 # Vẽ rectangle và hiển thị class và conf
                 cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(self.image, f"{box.cls[0]} {box.conf[0]:.2f}", (x1, y1 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36,255,12), 2)
+                cv2.putText(self.image, f"{box.conf[0]:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36,255,12), 2)
                 # Cập nhật mask cho vùng trong box
                 boxes_mask[y1:y2, x1:x2] = 255
         # Kết hợp mask gốc với mask boxes
