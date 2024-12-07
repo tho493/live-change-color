@@ -3,13 +3,13 @@ import numpy as np
 import tkinter as tk
 from tkinter import ttk, filedialog
 from PIL import Image, ImageTk
-from ultralytics import YOLO
+from ultralyticsplus import YOLO
 
 class HSVColorChanger:
     def __init__(self, root):
         self.root = root
         self.root.title("Đổi màu áo")
-        self.model = YOLO("yolo11n.pt")
+        self.model = YOLO("kesimeg/yolov8n-clothing-detection")
         
         main_frame = ttk.Frame(root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -84,13 +84,17 @@ class HSVColorChanger:
         if self.image is None:
             return
             
-        self.results_yolo = self.model.track(self.image, persist=True, classes=0, verbose=False)
+        self.results_yolo = self.model.predict(self.image, classes=2)
+        # for result in self.results:
+        #     for box in result.boxes:
+        #             x1, y1, x2, y2 = map(int, box.xyxy[0])
+        #             cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
         
         color_ranges = {
             'black': (np.array([0, 0, 0]), np.array([180, 255, 45])),
-            'white': (np.array([0, 0, 180]), np.array([180, 50, 255])), 
+            'white': (np.array([0, 0, 180]), np.array([180, 255, 255])), 
             'red': (np.array([0, 70, 50]), np.array([20, 255, 255])),
             'blue': (np.array([85, 50, 50]), np.array([145, 255, 255])),
             'green': (np.array([35, 70, 50]), np.array([85, 255, 255]))
@@ -110,67 +114,31 @@ class HSVColorChanger:
     def update_color(self, event):
         if self.image is None or self.mask is None:
             return
-
-        # Tải Haar cascade để phát hiện khuôn mặt
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-        # Tạo mask
+            
+        # Tạo mask mới chỉ cho các vùng boxes
         boxes_mask = np.zeros_like(self.mask)
-        face_area_mask = np.zeros_like(self.mask)
-
-        gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-
-        for result in self.results_yolo:
-            for box in result.boxes:
+        
+        for box in self.results_yolo[0].boxes:
+            if(box.conf[0] > 0.7):
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                # Vẽ hình chữ nhật cho người
+                # Vẽ rectangle và hiển thị class và conf
                 cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                # Cắt ROI để phát hiện khuôn mặt
-                roi_gray = gray[y1:y2, x1:x2]
-                roi_color = self.image[y1:y2, x1:x2]
-
-                # Phát hiện khuôn mặt trong ROI
-                faces = face_cascade.detectMultiScale(roi_gray, 1.1, 4)
-
-                # Cập nhật mask cho các vùng box
+                cv2.putText(self.image, f"{box.cls[0]} {box.conf[0]:.2f}", (x1, y1 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36,255,12), 2)
+                # Cập nhật mask cho vùng trong box
                 boxes_mask[y1:y2, x1:x2] = 255
-
-                for (fx, fy, fw, fh) in faces:
-                    # Tính toán hệ số mở rộng
-                    expansion_factor = 1.3
-                    new_fw = int(fw * expansion_factor)  # Mở rộng chiều rộng
-                    new_x1 = fx - int((new_fw - fw) / 2)  # Tính toán tọa độ x mới bên trái
-                    new_x2 = new_x1 + new_fw  # Tính toán tọa độ x mới bên phải
-
-                    # Tạo các điểm đường viền quanh khuôn mặt với phần mở rộng
-                    head_extension = int(fh * 0.5)
-                    extended_contour = np.array([
-                        [new_x1, fy - head_extension],      # Điểm trên bên trái
-                        [new_x2, fy - head_extension],      # Điểm trên bên phải
-                        [new_x2, fy + fh],                  # Điểm dưới bên phải
-                        [new_x1, fy + fh]                   # Điểm dưới bên trái
-                    ], np.int32)
-
-                    # Tạo mask cho vùng khuôn mặt
-                    shifted_contour = extended_contour + (x1, y1)
-                    cv2.fillPoly(face_area_mask, [shifted_contour], color=(255, 255, 255))
-
-        # Kết hợp các mask
-        boxes_without_faces = cv2.bitwise_and(boxes_mask, cv2.bitwise_not(face_area_mask))
-        final_mask = cv2.bitwise_and(self.mask, boxes_without_faces)
-
+        # Kết hợp mask gốc với mask boxes
+        combined_mask = cv2.bitwise_and(self.mask, boxes_mask)
+        
         hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
-
+        
         new_hue = int(self.hue_scale.get())
         new_sat = int(self.sat_scale.get())
         new_val = int(self.val_scale.get())
-
-        # Chỉ thay đổi màu sắc ở các vùng không phải mặt
-        hsv[final_mask > 0, 0] = new_hue
-        hsv[final_mask > 0, 1] = new_sat
-        hsv[final_mask > 0, 2] = new_val
-
+        
+        hsv[combined_mask > 0, 0] = new_hue
+        hsv[combined_mask > 0, 1] = new_sat
+        hsv[combined_mask > 0, 2] = new_val
+        
         result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
         self.display_image(result, self.processed_label)
@@ -193,9 +161,6 @@ class HSVColorChanger:
         label.configure(image=photo)
         label.image = photo
 
-    def __del__(self):
-        if self.camera is not None:
-            self.camera.release()
 if __name__ == "__main__":
     root = tk.Tk()
     app = HSVColorChanger(root)
