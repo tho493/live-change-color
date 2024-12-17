@@ -101,13 +101,13 @@ class HSVColorChanger:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 # Tìm màu trung bình của tâm vùng box
                 center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-                avg_color = hsv[center_y, center_x]
+                avg_color = hsv[center_y + int(center_y * 0.1), center_x]
                 # Đảm bảo rằng các giá trị màu nằm trong phạm vi HSV
                 avg_color = np.maximum(np.minimum(avg_color, 255), 0)
                 rgb_color = cv2.cvtColor(np.uint8([[[avg_color[0], avg_color[1], avg_color[2]]]]), cv2.COLOR_HSV2RGB)[0][0]
                 self.color_label.config(text=f"Màu trung bình: RGB={rgb_color[0]}, {rgb_color[1]}, {rgb_color[2]}")
 
-                cv2.circle(self.image, (center_x, center_y), 5, (0, 255, 0), 2)
+                cv2.circle(self.image, (center_x, center_y + int(center_y * 0.1)), 5, (0, 255, 0), 2)
                 # Vẽ viền box
                 cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 self.mask[y1:y2, x1:x2] = 255
@@ -129,7 +129,7 @@ class HSVColorChanger:
                 center_y = (y1 + y2) // 2
                 
                 # Lấy màu tại tâm
-                center_color = hsv[center_y, center_x]
+                center_color = hsv[center_y + int(center_y * 0.1), center_x]
                 
                 # Tạo khoảng màu rộng hơn để tìm kiếm vùng tối của vật thể
                 lower_bound = np.array([max(0, center_color[0] - 30), 
@@ -148,9 +148,17 @@ class HSVColorChanger:
                 new_val = int(self.val_scale.get())
                 
                 region = hsv[y1:y2, x1:x2]
-                region[color_mask > 0, 0] = new_hue
-                region[color_mask > 0, 1] = new_sat 
-                region[color_mask > 0, 2] = new_val
+
+                blend_factor = 0.7 
+                
+                # Tính toán màu mới dựa trên pha trộn với màu gốc
+                region[color_mask > 0, 0] = int(new_hue * blend_factor + region[color_mask > 0, 0].mean() * (1 - blend_factor))
+                region[color_mask > 0, 1] = np.clip(int(new_sat * blend_factor + region[color_mask > 0, 1].mean() * (1 - blend_factor)), 0, 255)
+                region[color_mask > 0, 2] = np.clip(int(new_val * blend_factor + region[color_mask > 0, 2].mean() * (1 - blend_factor)), 0, 255)
+
+                # Hòa trộn với màu gốc
+                blended_region = cv2.addWeighted(region, 0.7, hsv[y1:y2, x1:x2], 0.3, 0)
+                hsv[y1:y2, x1:x2] = blended_region
                 
                 # Vẽ tâm và biên của vật thể
                 cv2.circle(self.image, (center_x, center_y), 5, (0, 255, 0), -1)
