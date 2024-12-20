@@ -70,104 +70,123 @@ class HSVColorChanger:
             self.is_camera_on = False
             self.camera_btn.configure(text="Bật camera")
         else:
-            self.camera = cv2.VideoCapture(0)
-            self.is_camera_on = True
-            self.camera_btn.configure(text="Tắt camera")
+            try:
+                self.camera = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+                if not self.camera.isOpened():
+                    raise Exception("Không thể mở camera")
+                    
+                self.is_camera_on = True
+                self.camera_btn.configure(text="Tắt camera")
+            except Exception as e:
+                print(f"Lỗi khi mở camera: {str(e)}")
+                self.camera = None
+                self.is_camera_on = False
             
     def update(self):
         if self.is_camera_on and self.camera is not None:
             ret, frame = self.camera.read()
             if ret:
-                self.image = cv2.flip(frame, 1)
+                self.image = frame
                 self.display_image(self.image, self.original_label)
                 self.create_mask()
         
         self.root.after(10, self.update)
+        
     def create_mask(self):
         if self.image is None:
             return
 
-        hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
+        # Chuyển ảnh sang grayscale
+        gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+        
+        # Làm mờ ảnh để giảm nhiễu
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Áp dụng Canny edge detection với ngưỡng thấp hơn
+        edges = cv2.Canny(blurred, 30, 150)
+        
+        # Thực hiện phép giãn nở để kết nối các cạnh
+        kernel = np.ones((3,3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=1)
         
         class_ranges = {'accessories': 0, 'bags': 1, 'clothing': 2, 'shoes': 3}
-
         selected_class = class_ranges[self.classification_combo.get()]  
         self.results_yolo = self.model.track(self.image, classes=selected_class)
 
-        self.mask = np.zeros_like(hsv[:, :, 0], dtype=np.uint8)
+        self.mask = np.zeros_like(gray, dtype=np.uint8)
         
         for box in self.results_yolo[0].boxes:
-            if box.conf[0] > 0.7:
+            if box.conf[0] > 0.5:  # Giảm ngưỡng tin cậy
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                # Tìm màu trung bình của tâm vùng box
-                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-                avg_color = hsv[center_y + int(center_y * 0.1), center_x]
-                # Đảm bảo rằng các giá trị màu nằm trong phạm vi HSV
-                avg_color = np.maximum(np.minimum(avg_color, 255), 0)
-                rgb_color = cv2.cvtColor(np.uint8([[[avg_color[0], avg_color[1], avg_color[2]]]]), cv2.COLOR_HSV2RGB)[0][0]
-                self.color_label.config(text=f"Màu trung bình: RGB={rgb_color[0]}, {rgb_color[1]}, {rgb_color[2]}")
-
-                cv2.circle(self.image, (center_x, center_y + int(center_y * 0.1)), 5, (0, 255, 0), 2)
-                # Vẽ viền box
-                cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                self.mask[y1:y2, x1:x2] = 255
                 
+                # Lấy vùng cạnh trong box
+                roi_edges = dilated[y1:y2, x1:x2]
+                
+                # Tìm contours từ cạnh
+                contours, _ = cv2.findContours(roi_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Lọc contours theo diện tích
+                min_area = 100  # Điều chỉnh ngưỡng diện tích tối thiểu
+                filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+                
+                # Vẽ và tô màu contours vào mask
+                cv2.drawContours(self.mask[y1:y2, x1:x2], filtered_contours, -1, 255, -1)
+                
+                # Vẽ box và tâm
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
+                cv2.circle(self.image, (center_x, center_y), 5, (0, 255, 0), -1)
+                cv2.rectangle(self.image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+                # Vẽ contours lên ảnh gốc
+                for contour in filtered_contours:
+                    contour_shifted = contour + np.array([x1, y1])
+                    cv2.drawContours(self.image, [contour_shifted], -1, (0, 0, 255), 2)
+                
+                # Hiển thị màu trung bình của vùng được chọn
+                mask_roi = self.mask[y1:y2, x1:x2]
+                if np.any(mask_roi > 0):
+                    avg_color = cv2.mean(self.image[y1:y2, x1:x2], mask=mask_roi)
+                    self.color_label.config(text=f"Màu trung bình: RGB={int(avg_color[2])}, {int(avg_color[1])}, {int(avg_color[0])}")
         
         self.update_color(None)
+        
     def update_color(self, event):
         if self.image is None or self.mask is None:
             return
             
-        hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(self.image.copy(), cv2.COLOR_BGR2HSV)
+        result = self.image.copy()
         
         for box in self.results_yolo[0].boxes:
-            if box.conf[0] > 0.7:
+            if box.conf[0] > 0.5:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 
-                # Tìm tâm của hộp
-                center_x = (x1 + x2) // 2
-                center_y = (y1 + y2) // 2
+                # Lấy vùng mask trong box
+                mask_roi = self.mask[y1:y2, x1:x2]
                 
-                # Lấy màu tại tâm
-                center_color = hsv[center_y + int(center_y * 0.1), center_x]
-                
-                # Tạo khoảng màu rộng hơn để tìm kiếm vùng tối của vật thể
-                lower_bound = np.array([max(0, center_color[0] - 30), 
-                                      max(0, center_color[1] - 100),
-                                      max(0, center_color[2] - 100)])
-                upper_bound = np.array([min(180, center_color[0] + 30),
-                                      min(255, center_color[1] + 100), 
-                                      min(255, center_color[2] + 100)])
-                
-                 # Tạo mask dựa trên khoảng màu
-                color_mask = cv2.inRange(hsv[y1:y2, x1:x2], lower_bound, upper_bound)
-                
-                # Áp dụng màu mới chỉ cho vùng có mask
+                # Áp dụng màu mới
                 new_hue = int(self.hue_scale.get())
                 new_sat = int(self.sat_scale.get())
                 new_val = int(self.val_scale.get())
                 
-                region = hsv[y1:y2, x1:x2]
-
-                blend_factor = 0.7 
+                # Tạo ảnh màu mới
+                colored_mask = np.zeros((y2-y1, x2-x1, 3), dtype=np.uint8)
+                colored_mask[:,:] = [new_hue, new_sat, new_val]
                 
-                # Tính toán màu mới dựa trên pha trộn với màu gốc
-                region[color_mask > 0, 0] = int(new_hue * blend_factor + region[color_mask > 0, 0].mean() * (1 - blend_factor))
-                region[color_mask > 0, 1] = np.clip(int(new_sat * blend_factor + region[color_mask > 0, 1].mean() * (1 - blend_factor)), 0, 255)
-                region[color_mask > 0, 2] = np.clip(int(new_val * blend_factor + region[color_mask > 0, 2].mean() * (1 - blend_factor)), 0, 255)
-
-                # Hòa trộn với màu gốc
-                blended_region = cv2.addWeighted(region, 0.7, hsv[y1:y2, x1:x2], 0.3, 0)
-                hsv[y1:y2, x1:x2] = blended_region
+                # Chuyển đổi sang BGR
+                colored_mask_bgr = cv2.cvtColor(colored_mask, cv2.COLOR_HSV2BGR)
                 
-                # Vẽ tâm và biên của vật thể
-                cv2.circle(self.image, (center_x, center_y), 5, (0, 255, 0), -1)
-                contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                # Áp dụng mask và blend
+                mask_3d = cv2.cvtColor(mask_roi, cv2.COLOR_GRAY2BGR) / 255.0
+                result[y1:y2, x1:x2] = (1 - mask_3d) * result[y1:y2, x1:x2] + mask_3d * colored_mask_bgr
+                
+                # Vẽ contours
+                contours, _ = cv2.findContours(mask_roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for contour in contours:
                     contour_shifted = contour + np.array([x1, y1])
-                    cv2.drawContours(self.image, [contour_shifted], -1, (0, 0, 255), 2)
+                    cv2.drawContours(result, [contour_shifted], -1, (0, 0, 255), 2)
         
-        result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
         self.display_image(result, self.processed_label)
         
     def display_image(self, cv_img, label):
@@ -187,7 +206,6 @@ class HSVColorChanger:
         
         label.configure(image=photo)
         label.image = photo
-
 if __name__ == "__main__":
     root = tk.Tk()
     app = HSVColorChanger(root)
